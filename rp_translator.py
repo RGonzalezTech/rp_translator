@@ -726,8 +726,8 @@ class MainWindow(tk.Tk):
         # Bind Ctrl+Enter to translate
         self.bind_all("<Control-Return>", lambda e: self._translate())
 
-        # Protocol for close — just hide (hotkey brings it back; final quit via menu)
-        self.protocol("WM_DELETE_WINDOW", self.withdraw)
+        # Protocol for close — clean shutdown
+        self.protocol("WM_DELETE_WINDOW", self._quit)
 
         # Start global hotkey listener
         self._start_hotkey_listener()
