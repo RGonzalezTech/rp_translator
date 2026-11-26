@@ -399,3 +399,326 @@ class CharacterDialog(tk.Toplevel):
     def _on_examples_generated(self, text):
         self.gen_btn.config(text="Generate Examples", state="normal")
         self._set_text(self.voice_text, text)
+
+
+class MainWindow(tk.Tk):
+    """Main application window."""
+
+    def __init__(self, conn):
+        super().__init__()
+        self.conn = conn
+        self.selected_character_id = None
+        self.settings = load_settings()
+
+        self.title("RP Translator")
+        self.geometry("480x420")
+        self.minsize(400, 300)
+
+        # Apply always-on-top from settings
+        self.attributes("-topmost", self.settings.get("always_on_top", False))
+
+        self._build_menu()
+        self._build_ui()
+        self._refresh_character_list()
+
+        # Bind Ctrl+Enter to translate
+        self.bind_all("<Control-Return>", lambda e: self._translate())
+
+        # Protocol for close — just hide (hotkey brings it back; final quit via menu)
+        self.protocol("WM_DELETE_WINDOW", self.withdraw)
+
+    # ── Menu ──────────────────────────────────────────────────────────────
+
+    def _build_menu(self):
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Settings", menu=settings_menu)
+
+        self.always_on_top_var = tk.BooleanVar(
+            value=self.settings.get("always_on_top", False)
+        )
+        settings_menu.add_checkbutton(
+            label="Always on Top",
+            variable=self.always_on_top_var,
+            command=self._toggle_always_on_top,
+        )
+
+        settings_menu.add_command(
+            label="Configure Hotkey...",
+            command=self._configure_hotkey,
+        )
+
+        settings_menu.add_separator()
+        settings_menu.add_command(label="Exit", command=self._quit)
+
+    def _toggle_always_on_top(self):
+        on = self.always_on_top_var.get()
+        self.attributes("-topmost", on)
+        self.settings["always_on_top"] = on
+        save_settings(self.settings)
+
+    def _configure_hotkey(self):
+        dialog = tk.Toplevel(self)
+        dialog.title("Configure Hotkey")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=10)
+        frame.pack()
+
+        ttk.Label(
+            frame, text="Press the key combination you want to use:"
+        ).pack(pady=4)
+
+        key_var = tk.StringVar(value=self.settings.get("hotkey", ""))
+        ttk.Label(frame, textvariable=key_var, font=("TkDefaultFont", 12, "bold")).pack(
+            pady=4
+        )
+
+        def on_key(event):
+            parts = []
+            if event.state & 0x4:
+                parts.append("<ctrl>")
+            if event.state & 0x1:
+                parts.append("<shift>")
+            if event.state & 0x20000:
+                parts.append("<alt>")
+            key = event.keysym.lower()
+            if key not in ("control_l", "control_r", "shift_l", "shift_r",
+                           "alt_l", "alt_r"):
+                parts.append(f"<{key}>")
+            if len(parts) > 1:  # at least one modifier + a key
+                key_var.set("+".join(parts))
+
+        dialog.bind("<KeyPress>", on_key)
+        dialog.focus_set()
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(pady=8)
+
+        def save_key():
+            new_hotkey = key_var.get()
+            if new_hotkey and "+" in new_hotkey:
+                self.settings["hotkey"] = new_hotkey
+                save_settings(self.settings)
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="Save", command=save_key).pack(
+            side="left", padx=4
+        )
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(
+            side="left", padx=4
+        )
+
+        dialog.update_idletasks()
+        w, h = dialog.winfo_width(), dialog.winfo_height()
+        px, py = self.winfo_rootx(), self.winfo_rooty()
+        pw, ph = self.winfo_width(), self.winfo_height()
+        dialog.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+
+    def _quit(self):
+        self.destroy()
+
+    # ── UI ────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        # Top panel — Character selector
+        top = ttk.LabelFrame(self, text="Character", padding=6)
+        top.pack(fill="x", padx=8, pady=(8, 4))
+
+        self.char_combo = ttk.Combobox(top, state="readonly", width=30)
+        self.char_combo.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.char_combo.bind("<<ComboboxSelected>>", self._on_char_selected)
+
+        ttk.Button(top, text="New", command=self._new_character).pack(
+            side="left", padx=1
+        )
+        ttk.Button(top, text="Edit", command=self._edit_character).pack(
+            side="left", padx=1
+        )
+        ttk.Button(top, text="Delete", command=self._delete_character).pack(
+            side="left", padx=1
+        )
+
+        # Placeholder shown when no characters
+        self.no_chars_label = ttk.Label(
+            top, text="No characters — create one first", foreground="gray"
+        )
+
+        # Middle panel — Input
+        mid = ttk.LabelFrame(self, text="Your Message", padding=6)
+        mid.pack(fill="x", padx=8, pady=4)
+
+        self.input_text = tk.Text(mid, height=3, wrap="word")
+        self.input_text.pack(fill="x")
+        # Update translate button state on input change
+        self.input_text.bind("<KeyRelease>", lambda e: self._update_translate_state())
+
+        btn_row = ttk.Frame(mid)
+        btn_row.pack(fill="x", pady=(4, 0))
+
+        self.translate_btn = ttk.Button(
+            btn_row, text="Translate (Ctrl+Enter)", command=self._translate
+        )
+        self.translate_btn.pack(side="left")
+        self.translate_btn.config(state="disabled")
+
+        # Bottom panel — Result
+        bot = ttk.LabelFrame(self, text="Translated", padding=6)
+        bot.pack(fill="both", expand=True, padx=8, pady=4)
+
+        self.result_text = tk.Text(bot, height=3, wrap="word", state="disabled")
+        self.result_text.pack(fill="both", expand=True)
+
+        copy_row = ttk.Frame(bot)
+        copy_row.pack(fill="x", pady=(4, 0))
+
+        self.copy_btn = ttk.Button(
+            copy_row, text="Copy", command=self._copy_result
+        )
+        self.copy_btn.pack(side="left")
+
+    # ── Character management ──────────────────────────────────────────────
+
+    def _refresh_character_list(self):
+        chars = list_characters(self.conn)
+        self._char_map = {c["name"]: c["id"] for c in chars}
+        names = list(self._char_map.keys())
+        self.char_combo["values"] = names
+
+        if not names:
+            self.char_combo.pack_forget()
+            self.no_chars_label.pack(side="left", fill="x", expand=True)
+            self.char_combo.set("")
+            self.selected_character_id = None
+        else:
+            self.no_chars_label.pack_forget()
+            self.char_combo.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            # Re-select if possible
+            if self.char_combo.get() in self._char_map:
+                pass  # keep selection
+            elif names:
+                self.char_combo.set(names[0])
+                self.selected_character_id = self._char_map[names[0]]
+
+        self._update_translate_state()
+
+    def _on_char_selected(self, event=None):
+        name = self.char_combo.get()
+        self.selected_character_id = self._char_map.get(name)
+        self._update_translate_state()
+
+    def _new_character(self):
+        dialog = CharacterDialog(self, self.conn)
+        self.wait_window(dialog)
+        if dialog.result:
+            self._refresh_character_list()
+            self.char_combo.set(dialog.result["name"])
+            self.selected_character_id = dialog.result["id"]
+            self._update_translate_state()
+
+    def _edit_character(self):
+        if not self.selected_character_id:
+            return
+        dialog = CharacterDialog(self, self.conn, self.selected_character_id)
+        self.wait_window(dialog)
+        if dialog.result:
+            self._refresh_character_list()
+            self.char_combo.set(dialog.result["name"])
+            self.selected_character_id = dialog.result["id"]
+
+    def _delete_character(self):
+        if not self.selected_character_id:
+            return
+        char = get_character(self.conn, self.selected_character_id)
+        if not char:
+            return
+        ok = messagebox.askyesno(
+            "Delete Character",
+            f'Delete "{char["name"]}"? This cannot be undone.',
+        )
+        if ok:
+            delete_character(self.conn, self.selected_character_id)
+            self.selected_character_id = None
+            self._refresh_character_list()
+
+    # ── Translation ───────────────────────────────────────────────────────
+
+    def _update_translate_state(self):
+        has_char = self.selected_character_id is not None
+        has_input = bool(self.input_text.get("1.0", "end-1c").strip())
+        if has_char and has_input:
+            self.translate_btn.config(state="normal")
+        else:
+            self.translate_btn.config(state="disabled")
+
+    def _translate(self):
+        if not self.selected_character_id:
+            return
+        user_message = self.input_text.get("1.0", "end-1c").strip()
+        if not user_message:
+            return
+
+        char = get_character(self.conn, self.selected_character_id)
+        if not char:
+            return
+
+        system_prompt = build_system_prompt(char)
+
+        self.translate_btn.config(text="Translating...", state="disabled")
+
+        def run():
+            result = call_llm(system_prompt, user_message)
+            self.after(0, lambda: self._on_translate_done(result))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_translate_done(self, result):
+        self.translate_btn.config(text="Translate (Ctrl+Enter)")
+        self._update_translate_state()
+
+        self.result_text.config(state="normal")
+        self.result_text.delete("1.0", "end")
+
+        if result.startswith("API") or result.startswith("Network") or \
+           result.startswith("Translation timed") or result.startswith("Error"):
+            self.result_text.insert("1.0", result)
+            self.result_text.tag_add("error", "1.0", "end")
+            self.result_text.tag_config("error", foreground="red")
+        else:
+            self.result_text.insert("1.0", result)
+            self.result_text.tag_remove("error", "1.0", "end")
+            # Auto-copy to clipboard
+            self._copy_result()
+
+        self.result_text.config(state="disabled")
+
+    def _copy_result(self):
+        text = self.result_text.get("1.0", "end-1c").strip()
+        if not text:
+            return
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+            self.copy_btn.config(text="Copied!")
+            self.after(1500, lambda: self.copy_btn.config(text="Copy"))
+        except Exception:
+            pass  # clipboard may not be available
+
+
+# ── Entry Point ───────────────────────────────────────────────────────────────
+
+def main():
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "characters.db")
+    conn = sqlite3.connect(db_path)
+    init_db(conn)
+    app = MainWindow(conn)
+    app.mainloop()
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()
