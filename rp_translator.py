@@ -533,13 +533,15 @@ class MainWindow(tk.Tk):
     # ── Hotkey ────────────────────────────────────────────────────────────
 
     def _start_hotkey_listener(self):
-        """Start the global hotkey listener in a daemon thread."""
+        """Start the global hotkey listener in a daemon thread.
+        Updates the status bar label on success/failure."""
+        hotkey_str = self.settings.get("hotkey", "<ctrl>+<shift>+t")
+
         try:
             from pynput.keyboard import GlobalHotKeys
         except ImportError:
-            return  # pynput not available; app still works without hotkey
-
-        hotkey_str = self.settings.get("hotkey", "<ctrl>+<shift>+t")
+            self._set_hotkey_status(f"Hotkey: pynput not installed", error=True)
+            return
 
         def on_activate():
             self.deiconify()
@@ -550,8 +552,20 @@ class MainWindow(tk.Tk):
             self._hotkey_listener = GlobalHotKeys({hotkey_str: on_activate})
             self._hotkey_listener.daemon = True
             self._hotkey_listener.start()
+            self._set_hotkey_status(f"Hotkey: {hotkey_str}")
         except Exception:
-            pass  # hotkey registration may fail (conflict); app still works
+            self._set_hotkey_status(
+                f"Hotkey: failed to register {hotkey_str}", error=True
+            )
+
+    def _set_hotkey_status(self, text, error=False):
+        """Update the status bar hotkey label."""
+        if hasattr(self, "hotkey_status"):
+            self.hotkey_status.config(text=text)
+            if error:
+                self.hotkey_status.config(foreground="red")
+            else:
+                self.hotkey_status.config(foreground="gray")
 
     def _stop_hotkey_listener(self):
         if self._hotkey_listener:
@@ -619,6 +633,12 @@ class MainWindow(tk.Tk):
             copy_row, text="Copy", command=self._copy_result
         )
         self.copy_btn.pack(side="left")
+
+        # Status bar
+        self.hotkey_status = ttk.Label(
+            self, text="Hotkey: starting...", foreground="gray"
+        )
+        self.hotkey_status.pack(side="bottom", anchor="w", padx=8, pady=(2, 4))
 
     # ── Character management ──────────────────────────────────────────────
 

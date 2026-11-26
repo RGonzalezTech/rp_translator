@@ -87,6 +87,22 @@ def test_call_llm_missing_key(monkeypatch):
     assert "api key" in result.lower()
 
 
+def test_call_llm_timeout(monkeypatch):
+    import requests as req_module
+    from rp_translator import call_llm
+
+    # Ensure API key is set so we get past the key check
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    # Mock requests.post to raise Timeout
+    def mock_post(*args, **kwargs):
+        raise req_module.exceptions.Timeout("timed out")
+
+    monkeypatch.setattr("rp_translator.requests.post", mock_post)
+    result = call_llm("system", "user message")
+    assert "timed out" in result.lower()
+
+
 def test_generate_voice_examples_returns_string(monkeypatch):
     from rp_translator import generate_voice_examples
     # Mock call_llm to avoid real API call
