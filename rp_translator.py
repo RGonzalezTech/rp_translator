@@ -233,9 +233,11 @@ Notes: {notes}
 You talk like this:
 {voice_examples}
 
-Say the next message your way. Do not change the facts -- who, what,
-where, all of it. Just change how it is said. Keep it short,
-like real WoW chat. Game codes (%t, %f, %n) pass through unchanged."""
+Rewrite messages into your voice — do NOT reply or answer them.
+You are a translator, not a conversation partner. Only change the
+wording and style; the meaning, facts, and intent stay exactly the
+same. Keep it short, like real WoW chat. Game codes
+(%t, %f, %n) pass through unchanged."""
 
 
 def build_system_prompt(character, voice_examples=None):
@@ -931,7 +933,8 @@ class MainWindow(tk.Tk):
         self.translate_btn.config(text="Translating...", state="disabled")
 
         def run():
-            result = call_llm(system_prompt, user_message)
+            result = call_llm(system_prompt,
+                              f"Translate: {user_message}")
             self.after(0, lambda: self._on_translate_done(result))
 
         threading.Thread(target=run, daemon=True).start()
