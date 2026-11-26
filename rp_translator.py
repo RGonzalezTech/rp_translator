@@ -364,6 +364,7 @@ def generate_voice_examples(character):
 
 import threading
 import tkinter as tk
+import webbrowser
 from tkinter import ttk, messagebox
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
@@ -1073,12 +1074,106 @@ class MainWindow(tk.Tk):
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
+def _show_api_key_error_dialog(message):
+    """Show an error dialog with a clickable link to the README."""
+    dialog = tk.Toplevel()
+    dialog.title("RP Translator — API Key Missing")
+    dialog.resizable(False, False)
+    dialog.configure(bg=PALETTE["bg"])
+
+    # Force the dialog to stay on top
+    dialog.attributes("-topmost", True)
+    dialog.grab_set()
+
+    frame = ttk.Frame(dialog, padding=16)
+    frame.pack()
+
+    # Split message into lines before the URL
+    lines = message.strip().split("\n")
+    text_lines = []
+    url_line = None
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("See instructions:"):
+            url_line = stripped
+        elif stripped.startswith("http"):
+            url_line = stripped
+        else:
+            text_lines.append(stripped)
+    text_before = "\n".join(text_lines)
+
+    # Main error text
+    if text_before:
+        label = ttk.Label(
+            frame, text=text_before, wraplength=380,
+            foreground=PALETTE["error"], background=PALETTE["bg"],
+            font=("Segoe UI", 10),
+        )
+        label.pack(pady=(0, 8))
+
+    # Clickable link label
+    def _open_url(event=None):
+        webbrowser.open(README_URL)
+
+    if url_line:
+        link = url_line.replace(README_URL, "").strip().rstrip(":")
+        link_label = ttk.Label(
+            frame,
+            text=f"{link}: {README_URL}",
+            foreground="#6ba4ff",
+            background=PALETTE["bg"],
+            cursor="hand2",
+            font=("Segoe UI", 10, "underline"),
+        )
+        link_label.pack(pady=(0, 12))
+        link_label.bind("<Button-1>", _open_url)
+    else:
+        # Fallback: show the URL directly
+        link_label = ttk.Label(
+            frame,
+            text=README_URL,
+            foreground="#6ba4ff",
+            background=PALETTE["bg"],
+            cursor="hand2",
+            font=("Segoe UI", 10, "underline"),
+        )
+        link_label.pack(pady=(0, 12))
+        link_label.bind("<Button-1>", _open_url)
+
+    # Instructions
+    instr = ttk.Label(
+        frame,
+        text="Set the variable, then restart the app.",
+        foreground=PALETTE["dim"], background=PALETTE["bg"],
+        font=("Segoe UI", 9),
+    )
+    instr.pack(pady=(0, 12))
+
+    # OK button
+    ttk.Button(frame, text="OK", command=dialog.destroy).pack()
+
+    # Center on screen
+    dialog.update_idletasks()
+    w = dialog.winfo_width()
+    h = dialog.winfo_height()
+    sw = dialog.winfo_screenwidth()
+    sh = dialog.winfo_screenheight()
+    x = (sw - w) // 2
+    y = (sh - h) // 2
+    dialog.geometry(f"+{x}+{y}")
+
+    dialog.wait_window()
+
+
 def main():
     # Check API key before anything else — show a dialog if missing.
     error = check_api_key()
     if error:
-        import tkinter.messagebox
-        tkinter.messagebox.showwarning("RP Translator — API Key Missing", error)
+        # Quick root for the dialog to attach to
+        root = tk.Tk()
+        root.withdraw()
+        _show_api_key_error_dialog(error)
+        root.destroy()
         return
 
     try:
