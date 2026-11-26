@@ -7,9 +7,10 @@ import sqlite3
 # ── Database ──────────────────────────────────────────────────────────────────
 
 def init_db(conn=None):
-    """Create the characters table if it doesn't exist. Returns the connection."""
+    """Create tables if they don't exist. Migrates old voice_examples column. Returns the connection."""
     if conn is None:
         conn = sqlite3.connect(_db_path())
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS characters (
             id INTEGER PRIMARY KEY,
@@ -21,8 +22,53 @@ def init_db(conn=None):
             voice_examples TEXT DEFAULT ''
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS voice_examples (
+            id INTEGER PRIMARY KEY,
+            character_id INTEGER NOT NULL,
+            before_text TEXT NOT NULL,
+            after_text TEXT NOT NULL,
+            FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+        )
+    """)
     conn.commit()
+    _migrate_voice_examples(conn)
     return conn
+
+
+def _migrate_voice_examples(conn):
+    """Migrate old voice_examples TEXT column to the new voice_examples table."""
+    # Check if migration already ran (any rows in voice_examples table)
+    already = conn.execute(
+        "SELECT COUNT(*) FROM voice_examples"
+    ).fetchone()[0]
+    if already > 0:
+        return
+
+    # Also skip if old column doesn't exist
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(characters)").fetchall()]
+    if "voice_examples" not in cols:
+        return
+
+    rows = conn.execute(
+        "SELECT id, voice_examples FROM characters WHERE voice_examples != ''"
+    ).fetchall()
+    if not rows:
+        return
+
+    for char_id, text in rows:
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Split on first " -> "
+            if " -> " in line:
+                before, after = line.split(" -> ", 1)
+                conn.execute(
+                    "INSERT INTO voice_examples (character_id, before_text, after_text) VALUES (?, ?, ?)",
+                    (char_id, before.strip(), after.strip()),
+                )
+    conn.commit()
 
 
 def _db_path():
@@ -30,12 +76,12 @@ def _db_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "characters.db")
 
 
-def add_character(conn, name, race, class_, backstory, notes, voice_examples):
+def add_character(conn, name, race, class_, backstory, notes):
     """Insert a character; returns the new row id."""
     cur = conn.execute(
-        "INSERT INTO characters (name, race, class, backstory, notes, voice_examples) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (name, race, class_, backstory, notes, voice_examples),
+        "INSERT INTO characters (name, race, class, backstory, notes) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (name, race, class_, backstory, notes),
     )
     conn.commit()
     return cur.lastrowid
@@ -44,7 +90,7 @@ def add_character(conn, name, race, class_, backstory, notes, voice_examples):
 def get_character(conn, id):
     """Return a character dict by id, or None."""
     row = conn.execute(
-        "SELECT id, name, race, class, backstory, notes, voice_examples "
+        "SELECT id, name, race, class, backstory, notes "
         "FROM characters WHERE id = ?",
         (id,),
     ).fetchone()
@@ -57,7 +103,6 @@ def get_character(conn, id):
         "class": row[3],
         "backstory": row[4],
         "notes": row[5],
-        "voice_examples": row[6],
     }
 
 
@@ -73,7 +118,7 @@ def update_character(conn, id, **fields):
     """Update character fields by id. Returns True if a row was updated."""
     if not fields:
         return False
-    allowed = {"name", "race", "class", "backstory", "notes", "voice_examples"}
+    allowed = {"name", "race", "class", "backstory", "notes"}
     sets = []
     values = []
     for k, v in fields.items():
@@ -95,6 +140,55 @@ def delete_character(conn, id):
     cur = conn.execute("DELETE FROM characters WHERE id = ?", (id,))
     conn.commit()
     return cur.rowcount > 0
+
+
+# ── Voice Examples CRUD ───────────────────────────────────────────────────────
+
+def get_voice_examples(conn, character_id):
+    """Return all voice examples for a character as a list of {id, before, after} dicts."""
+    rows = conn.execute(
+        "SELECT id, before_text, after_text FROM voice_examples "
+        "WHERE character_id = ? ORDER BY id",
+        (character_id,),
+    ).fetchall()
+    return [{"id": r[0], "before": r[1], "after": r[2]} for r in rows]
+
+
+def add_voice_example(conn, character_id, before, after):
+    """Add a voice example row. Returns the new row id."""
+    cur = conn.execute(
+        "INSERT INTO voice_examples (character_id, before_text, after_text) "
+        "VALUES (?, ?, ?)",
+        (character_id, before.strip(), after.strip()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def update_voice_example(conn, example_id, before, after):
+    """Update a voice example by id. Returns True if updated."""
+    cur = conn.execute(
+        "UPDATE voice_examples SET before_text = ?, after_text = ? WHERE id = ?",
+        (before.strip(), after.strip(), example_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def delete_voice_example(conn, example_id):
+    """Delete a single voice example by id. Returns True if deleted."""
+    cur = conn.execute("DELETE FROM voice_examples WHERE id = ?", (example_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def clear_voice_examples(conn, character_id):
+    """Delete all voice examples for a character. Returns count deleted."""
+    cur = conn.execute(
+        "DELETE FROM voice_examples WHERE character_id = ?", (character_id,)
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -132,30 +226,33 @@ def save_settings(settings):
 
 import requests
 
-SYSTEM_PROMPT_TEMPLATE = """You are {name}, a {race} {class_} in World of Warcraft.
+SYSTEM_PROMPT_TEMPLATE = """{name}, a {race} {class_}.
 Backstory: {backstory}
 Notes: {notes}
 
-Here are examples of how you speak:
+You talk like this:
 {voice_examples}
 
-Rewrite the following message in your character's voice. Preserve any
-tokens starting with % (such as %t, %f, %n) exactly as they appear —
-do not modify them.
-
-Message: {user_input}"""
+Say the next message your way. Do not change the facts -- who, what,
+where, all of it. Just change how it is said. Keep it short,
+like real WoW chat. Game codes (%t, %f, %n) pass through unchanged."""
 
 
-def build_system_prompt(character):
-    """Build the system prompt from character dict (without user_input yet)."""
+def build_system_prompt(character, voice_examples=None):
+    """Build the system prompt from character dict and optional voice examples list."""
+    if voice_examples is None:
+        voice_examples = []
+    lines = []
+    for ex in voice_examples:
+        lines.append(f"{ex['before']} -> {ex['after']}")
+    examples_text = "\n".join(lines) if lines else ""
     return SYSTEM_PROMPT_TEMPLATE.format(
         name=character["name"],
         race=character["race"],
         class_=character["class"],
         backstory=character.get("backstory", ""),
         notes=character.get("notes", ""),
-        voice_examples=character.get("voice_examples", ""),
-        user_input="{user_input}",  # placeholder for call_llm to fill
+        voice_examples=examples_text,
     )
 
 
@@ -165,9 +262,6 @@ def call_llm(system_prompt, user_message, timeout=30):
     if not api_key:
         return "API key not found. Set OPENROUTER_API_KEY environment variable."
 
-    # Fill in the user message placeholder
-    prompt = system_prompt.replace("{user_input}", user_message)
-
     try:
         resp = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -176,9 +270,9 @@ def call_llm(system_prompt, user_message, timeout=30):
                 "Content-Type": "application/json",
             },
             json={
-                "model": "deepseek/deepseek-v4-flash-0731",
+                "model": "deepseek/deepseek-v3.2",
                 "messages": [
-                    {"role": "system", "content": prompt},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message},
                 ],
             },
@@ -195,17 +289,21 @@ def call_llm(system_prompt, user_message, timeout=30):
         return f"Error: {e}"
 
 
-VOICE_EXAMPLES_PROMPT = """Generate 3 example message translations for a {race} {class_} named {name} in World of Warcraft.
-
+VOICE_EXAMPLES_PROMPT = """{name} is a {race} {class_} in WoW.
 Backstory: {backstory}
 Notes: {notes}
 
-Format each example as 'plain message -> character's response' on its own line.
-Make them sound natural and in-character. Only return the examples, no other text."""
+Write 3 short chat messages and how {name} would say them instead.
+Reply with just a JSON array of "before" and "after" pairs. Example:
+[
+  {{"before": "gj team", "after": "The Light protects us!"}},
+  {{"before": "incoming", "after": "They approach from the east!"}},
+  {{"before": "thanks", "after": "My gratitude, friend."}}
+]"""
 
 
 def generate_voice_examples(character):
-    """Generate voice examples via LLM based on race/class/backstory."""
+    """Generate voice examples via LLM. Returns a list of {{before, after}} dicts."""
     system_prompt = VOICE_EXAMPLES_PROMPT.format(
         name=character["name"],
         race=character["race"],
@@ -213,7 +311,27 @@ def generate_voice_examples(character):
         backstory=character.get("backstory", ""),
         notes=character.get("notes", ""),
     )
-    return call_llm(system_prompt, "Generate voice examples.")
+    result = call_llm(system_prompt, "Generate voice examples.")
+    try:
+        # Try to extract JSON from the response (may be wrapped in markdown fences)
+        text = result.strip()
+        if text.startswith("```"):
+            # Strip markdown code fences
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        examples = json.loads(text)
+        if isinstance(examples, list):
+            return examples
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: parse as text lines
+    examples = []
+    for line in result.strip().split("\n"):
+        line = line.strip()
+        if " -> " in line:
+            before, after = line.split(" -> ", 1)
+            examples.append({"before": before.strip(), "after": after.strip()})
+    return examples
 
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
@@ -293,22 +411,45 @@ class CharacterDialog(tk.Toplevel):
         self.notes_text.grid(row=row, column=1, sticky="ew", pady=2)
         row += 1
 
-        # Voice Examples
+        # Voice Examples — table header
         ttk.Label(frame, text="Voice Examples:").grid(
             row=row, column=0, sticky="nw", pady=2
         )
-        self.voice_text = tk.Text(frame, width=30, height=5, wrap="word")
-        self.voice_text.grid(row=row, column=1, sticky="ew", pady=2)
+        # Container for the example rows
+        examples_container = ttk.Frame(frame)
+        examples_container.grid(row=row, column=1, sticky="ew", pady=2)
         row += 1
 
-        # Generate Examples button
+        # Header row: "Before" / "After"
+        header_frame = ttk.Frame(examples_container)
+        header_frame.pack(fill="x")
+        ttk.Label(header_frame, text="Before", width=14, anchor="center").pack(
+            side="left", padx=(0, 2)
+        )
+        ttk.Label(header_frame, text="After", width=14, anchor="center").pack(
+            side="left", padx=(2, 0)
+        )
+
+        # Scrollable frame for example rows
+        self._example_rows = []
+        self._examples_frame = ttk.Frame(examples_container)
+        self._examples_frame.pack(fill="x", pady=(2, 0))
+
+        # Buttons row
+        btn_row_frame = ttk.Frame(frame)
+        btn_row_frame.grid(row=row, column=1, sticky="e", pady=(0, 8))
+        row += 1
+
+        ttk.Button(
+            btn_row_frame, text="+", width=3, command=self._add_example_row
+        ).pack(side="left", padx=2)
+
         self.gen_btn = ttk.Button(
-            frame,
+            btn_row_frame,
             text="Generate Examples",
             command=self._generate_examples,
         )
-        self.gen_btn.grid(row=row, column=1, sticky="e", pady=(0, 8))
-        row += 1
+        self.gen_btn.pack(side="left", padx=2)
 
         # Separator
         ttk.Separator(frame, orient="horizontal").grid(
@@ -326,6 +467,41 @@ class CharacterDialog(tk.Toplevel):
 
         frame.columnconfigure(1, weight=1)
 
+    def _add_example_row(self, before="", after=""):
+        """Add one before/after row to the examples table."""
+        row_frame = ttk.Frame(self._examples_frame)
+        row_frame.pack(fill="x", pady=1)
+
+        before_var = tk.StringVar(value=before)
+        after_var = tk.StringVar(value=after)
+
+        before_entry = ttk.Entry(row_frame, textvariable=before_var, width=15)
+        before_entry.pack(side="left", padx=(0, 2))
+
+        ttk.Label(row_frame, text="→").pack(side="left", padx=2)
+
+        after_entry = ttk.Entry(row_frame, textvariable=after_var, width=15)
+        after_entry.pack(side="left", padx=(2, 2))
+
+        del_btn = ttk.Button(
+            row_frame, text="×", width=2,
+            command=lambda: self._remove_example_row(row_frame),
+        )
+        del_btn.pack(side="left", padx=2)
+
+        self._example_rows.append({
+            "frame": row_frame,
+            "before": before_var,
+            "after": after_var,
+        })
+
+    def _remove_example_row(self, row_frame):
+        """Remove a row from the examples table."""
+        self._example_rows = [
+            r for r in self._example_rows if r["frame"] is not row_frame
+        ]
+        row_frame.destroy()
+
     def _load_character(self, character_id):
         char = get_character(self.conn, character_id)
         if not char:
@@ -335,7 +511,10 @@ class CharacterDialog(tk.Toplevel):
         self.class_var.set(char["class"])
         self._set_text(self.backstory_text, char["backstory"])
         self._set_text(self.notes_text, char["notes"])
-        self._set_text(self.voice_text, char["voice_examples"])
+        # Load voice examples from the new table
+        examples = get_voice_examples(self.conn, character_id)
+        for ex in examples:
+            self._add_example_row(ex["before"], ex["after"])
 
     def _set_text(self, widget, value):
         widget.delete("1.0", "end")
@@ -345,48 +524,63 @@ class CharacterDialog(tk.Toplevel):
     def _get_text(self, widget):
         return widget.get("1.0", "end-1c").strip()
 
-    def _get_character_data(self):
-        return {
-            "name": self.name_var.get().strip(),
-            "race": self.race_var.get().strip(),
-            "class": self.class_var.get().strip(),
-            "backstory": self._get_text(self.backstory_text),
-            "notes": self._get_text(self.notes_text),
-            "voice_examples": self._get_text(self.voice_text),
-        }
+    def _get_voice_examples_from_ui(self):
+        """Collect voice examples from the UI rows."""
+        return [
+            {"before": r["before"].get().strip(), "after": r["after"].get().strip()}
+            for r in self._example_rows
+            if r["before"].get().strip() or r["after"].get().strip()
+        ]
 
     def _save(self):
-        data = self._get_character_data()
-        if not data["name"] or not data["race"] or not data["class"]:
+        # Collect character fields
+        name = self.name_var.get().strip()
+        race = self.race_var.get().strip()
+        class_ = self.class_var.get().strip()
+        backstory = self._get_text(self.backstory_text)
+        notes = self._get_text(self.notes_text)
+
+        if not name or not race or not class_:
             messagebox.showwarning(
                 "Missing Fields", "Name, Race, and Class are required."
             )
             return
 
         if self.character_id:
-            update_character(self.conn, self.character_id, **data)
-            data["id"] = self.character_id
+            update_character(self.conn, self.character_id,
+                             name=name, race=race, class_=class_,
+                             backstory=backstory, notes=notes)
+            char_id = self.character_id
         else:
-            data["id"] = add_character(
-                self.conn,
-                data["name"],
-                data["race"],
-                data["class"],
-                data["backstory"],
-                data["notes"],
-                data["voice_examples"],
-            )
-        self.result = data
+            char_id = add_character(self.conn, name, race, class_,
+                                    backstory, notes)
+
+        # Save voice examples
+        clear_voice_examples(self.conn, char_id)
+        for ex in self._get_voice_examples_from_ui():
+            add_voice_example(self.conn, char_id, ex["before"], ex["after"])
+
+        self.result = {"id": char_id, "name": name}
         self.destroy()
 
     def _generate_examples(self):
-        data = self._get_character_data()
-        if not data["name"] or not data["race"] or not data["class"]:
+        name = self.name_var.get().strip()
+        race = self.race_var.get().strip()
+        class_ = self.class_var.get().strip()
+        if not name or not race or not class_:
             messagebox.showwarning(
                 "Missing Fields",
                 "Fill in Name, Race, and Class before generating examples.",
             )
             return
+
+        data = {
+            "name": name,
+            "race": race,
+            "class": class_,
+            "backstory": self._get_text(self.backstory_text),
+            "notes": self._get_text(self.notes_text),
+        }
 
         self.gen_btn.config(text="Generating...", state="disabled")
 
@@ -396,9 +590,15 @@ class CharacterDialog(tk.Toplevel):
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _on_examples_generated(self, text):
+    def _on_examples_generated(self, examples):
         self.gen_btn.config(text="Generate Examples", state="normal")
-        self._set_text(self.voice_text, text)
+        # Clear existing rows, fill with generated examples
+        for r in list(self._example_rows):
+            self._remove_example_row(r["frame"])
+        for ex in examples:
+            before = ex.get("before", "")
+            after = ex.get("after", "")
+            self._add_example_row(before, after)
 
 
 class MainWindow(tk.Tk):
@@ -725,7 +925,8 @@ class MainWindow(tk.Tk):
         if not char:
             return
 
-        system_prompt = build_system_prompt(char)
+        voice_examples = get_voice_examples(self.conn, self.selected_character_id)
+        system_prompt = build_system_prompt(char, voice_examples)
 
         self.translate_btn.config(text="Translating...", state="disabled")
 

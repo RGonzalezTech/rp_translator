@@ -1,0 +1,30 @@
+# Bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+
+# Database (local)
+*.db
+
+# Local settings (user-specific, not tracked)
+settings.json
