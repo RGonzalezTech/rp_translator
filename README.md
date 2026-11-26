@@ -22,6 +22,33 @@ Press Ctrl+Shift+T from anywhere (even in-game), type, hit Translate, paste.
 - **Global hotkey** — configurable (default Ctrl+Shift+T), summons from anywhere
 - **Always-on-top toggle** — float over the game in windowed mode
 
+## API Key Setup
+
+RP Translator uses OpenRouter to rewrite messages. You need a free API key.
+
+1. Go to https://openrouter.ai/keys and create a key (free, no payment required)
+2. Set the environment variable:
+
+**Command Prompt (cmd):**
+```
+set OPENROUTER_API_KEY=sk-or-v1-your-key-here
+```
+
+**PowerShell:**
+```
+$env:OPENROUTER_API_KEY="sk-or-v1-your-key-here"
+```
+
+**Permanent (Windows):**
+```
+setx OPENROUTER_API_KEY "sk-or-v1-your-key-here"
+```
+Then restart your terminal or the RP Translator app.
+
+3. Run the app — it checks for the key on startup and guides you here if it's missing.
+
+> The key starts with `sk-or-v1-`. Keep it private — anyone with your key can use your OpenRouter credits.
+
 ## Voice Examples
 
 The single biggest lever for getting good output. Fill in 2-3 before/after pairs:
