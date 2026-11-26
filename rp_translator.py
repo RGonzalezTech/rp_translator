@@ -126,3 +126,91 @@ def save_settings(settings):
     """Write settings dict to settings.json."""
     with open(_settings_path(), "w") as f:
         json.dump(settings, f, indent=2)
+
+
+# ── LLM Client ────────────────────────────────────────────────────────────────
+
+import requests
+
+SYSTEM_PROMPT_TEMPLATE = """You are {name}, a {race} {class_} in World of Warcraft.
+Backstory: {backstory}
+Notes: {notes}
+
+Here are examples of how you speak:
+{voice_examples}
+
+Rewrite the following message in your character's voice. Preserve any
+tokens starting with % (such as %t, %f, %n) exactly as they appear —
+do not modify them.
+
+Message: {user_input}"""
+
+
+def build_system_prompt(character):
+    """Build the system prompt from character dict (without user_input yet)."""
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        name=character["name"],
+        race=character["race"],
+        class_=character["class"],
+        backstory=character.get("backstory", ""),
+        notes=character.get("notes", ""),
+        voice_examples=character.get("voice_examples", ""),
+        user_input="{user_input}",  # placeholder for call_llm to fill
+    )
+
+
+def call_llm(system_prompt, user_message, timeout=30):
+    """Call OpenRouter API. Returns response text or error string."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return "API key not found. Set OPENROUTER_API_KEY environment variable."
+
+    # Fill in the user message placeholder
+    prompt = system_prompt.replace("{user_input}", user_message)
+
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "deepseek/deepseek-v4-flash-0731",
+                "messages": [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_message},
+                ],
+            },
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            return f"API error ({resp.status_code}): {resp.text[:200]}"
+        return resp.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.Timeout:
+        return "Translation timed out. Try again."
+    except requests.exceptions.ConnectionError:
+        return "Network error. Check your connection."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+VOICE_EXAMPLES_PROMPT = """Generate 3 example message translations for a {race} {class_} named {name} in World of Warcraft.
+
+Backstory: {backstory}
+Notes: {notes}
+
+Format each example as 'plain message -> character's response' on its own line.
+Make them sound natural and in-character. Only return the examples, no other text."""
+
+
+def generate_voice_examples(character):
+    """Generate voice examples via LLM based on race/class/backstory."""
+    system_prompt = VOICE_EXAMPLES_PROMPT.format(
+        name=character["name"],
+        race=character["race"],
+        class_=character["class"],
+        backstory=character.get("backstory", ""),
+        notes=character.get("notes", ""),
+    )
+    return call_llm(system_prompt, "Generate voice examples.")

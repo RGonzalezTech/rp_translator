@@ -52,3 +52,49 @@ def test_settings_defaults():
     assert "hotkey" in settings
     assert "always_on_top" in settings
     assert settings["always_on_top"] is False
+
+
+# ── LLM Client tests ──────────────────────────────────────────────────────────
+
+def test_build_system_prompt():
+    from rp_translator import build_system_prompt
+    char = {"name": "Thrall", "race": "Orc", "class": "Shaman",
+            "backstory": "Warchief", "notes": "Speaks wisdom",
+            "voice_examples": "gj -> Lok'tar!"}
+    prompt = build_system_prompt(char)
+    assert "Thrall" in prompt
+    assert "Orc" in prompt
+    assert "Shaman" in prompt
+    assert "Warchief" in prompt
+    assert "Lok'tar" in prompt
+    assert "%t" in prompt  # token instruction present
+
+
+def test_build_system_prompt_special_chars():
+    from rp_translator import build_system_prompt
+    char = {"name": "D'rath", "race": "Night Elf", "class": "Druid",
+            "backstory": 'Follower of "Elune"', "notes": "Loves %t",
+            "voice_examples": "hi -> greetings"}
+    prompt = build_system_prompt(char)
+    assert "D'rath" in prompt
+    assert 'Elune' in prompt
+
+
+def test_call_llm_missing_key(monkeypatch):
+    from rp_translator import call_llm
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    result = call_llm("system", "user message")
+    assert "api key" in result.lower()
+
+
+def test_generate_voice_examples_returns_string(monkeypatch):
+    from rp_translator import generate_voice_examples
+    # Mock call_llm to avoid real API call
+    def mock_call_llm(system_prompt, user_message, timeout=30):
+        return "gj team -> The Light protects us!\nincoming -> They approach!"
+    monkeypatch.setattr("rp_translator.call_llm", mock_call_llm)
+    char = {"name": "Test", "race": "Human", "class": "Paladin",
+            "backstory": "Knight of the Silver Hand", "notes": ""}
+    result = generate_voice_examples(char)
+    assert isinstance(result, str)
+    assert len(result) > 0
