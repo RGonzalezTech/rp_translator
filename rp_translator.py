@@ -417,6 +417,8 @@ class MainWindow(tk.Tk):
         # Apply always-on-top from settings
         self.attributes("-topmost", self.settings.get("always_on_top", False))
 
+        self._hotkey_listener = None
+
         self._build_menu()
         self._build_ui()
         self._refresh_character_list()
@@ -426,6 +428,9 @@ class MainWindow(tk.Tk):
 
         # Protocol for close — just hide (hotkey brings it back; final quit via menu)
         self.protocol("WM_DELETE_WINDOW", self.withdraw)
+
+        # Start global hotkey listener
+        self._start_hotkey_listener()
 
     # ── Menu ──────────────────────────────────────────────────────────────
 
@@ -504,6 +509,8 @@ class MainWindow(tk.Tk):
             if new_hotkey and "+" in new_hotkey:
                 self.settings["hotkey"] = new_hotkey
                 save_settings(self.settings)
+                self._stop_hotkey_listener()
+                self._start_hotkey_listener()
             dialog.destroy()
 
         ttk.Button(btn_frame, text="Save", command=save_key).pack(
@@ -520,7 +527,39 @@ class MainWindow(tk.Tk):
         dialog.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
 
     def _quit(self):
+        self._stop_hotkey_listener()
         self.destroy()
+
+    # ── Hotkey ────────────────────────────────────────────────────────────
+
+    def _start_hotkey_listener(self):
+        """Start the global hotkey listener in a daemon thread."""
+        try:
+            from pynput.keyboard import GlobalHotKeys
+        except ImportError:
+            return  # pynput not available; app still works without hotkey
+
+        hotkey_str = self.settings.get("hotkey", "<ctrl>+<shift>+t")
+
+        def on_activate():
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+
+        try:
+            self._hotkey_listener = GlobalHotKeys({hotkey_str: on_activate})
+            self._hotkey_listener.daemon = True
+            self._hotkey_listener.start()
+        except Exception:
+            pass  # hotkey registration may fail (conflict); app still works
+
+    def _stop_hotkey_listener(self):
+        if self._hotkey_listener:
+            try:
+                self._hotkey_listener.stop()
+            except Exception:
+                pass
+            self._hotkey_listener = None
 
     # ── UI ────────────────────────────────────────────────────────────────
 
