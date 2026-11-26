@@ -214,3 +214,188 @@ def generate_voice_examples(character):
         notes=character.get("notes", ""),
     )
     return call_llm(system_prompt, "Generate voice examples.")
+
+
+# ── GUI ───────────────────────────────────────────────────────────────────────
+
+import threading
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+
+class CharacterDialog(tk.Toplevel):
+    """Dialog for creating or editing a character."""
+
+    def __init__(self, parent, conn, character_id=None):
+        super().__init__(parent)
+        self.conn = conn
+        self.character_id = character_id
+        self.result = None  # set to character dict on save, None on cancel
+
+        self.title("Edit Character" if character_id else "New Character")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self._build_ui()
+
+        if character_id:
+            self._load_character(character_id)
+
+        # Center on parent
+        self.update_idletasks()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        w, h = self.winfo_width(), self.winfo_height()
+        self.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+
+    def _build_ui(self):
+        frame = ttk.Frame(self, padding=10)
+        frame.pack(fill="both", expand=True)
+
+        row = 0
+
+        # Name
+        ttk.Label(frame, text="Name:").grid(row=row, column=0, sticky="w", pady=2)
+        self.name_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.name_var, width=30).grid(
+            row=row, column=1, sticky="ew", pady=2
+        )
+        row += 1
+
+        # Race
+        ttk.Label(frame, text="Race:").grid(row=row, column=0, sticky="w", pady=2)
+        self.race_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.race_var, width=30).grid(
+            row=row, column=1, sticky="ew", pady=2
+        )
+        row += 1
+
+        # Class
+        ttk.Label(frame, text="Class:").grid(row=row, column=0, sticky="w", pady=2)
+        self.class_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.class_var, width=30).grid(
+            row=row, column=1, sticky="ew", pady=2
+        )
+        row += 1
+
+        # Backstory
+        ttk.Label(frame, text="Backstory:").grid(
+            row=row, column=0, sticky="nw", pady=2
+        )
+        self.backstory_text = tk.Text(frame, width=30, height=3, wrap="word")
+        self.backstory_text.grid(row=row, column=1, sticky="ew", pady=2)
+        row += 1
+
+        # Notes
+        ttk.Label(frame, text="Notes:").grid(row=row, column=0, sticky="nw", pady=2)
+        self.notes_text = tk.Text(frame, width=30, height=3, wrap="word")
+        self.notes_text.grid(row=row, column=1, sticky="ew", pady=2)
+        row += 1
+
+        # Voice Examples
+        ttk.Label(frame, text="Voice Examples:").grid(
+            row=row, column=0, sticky="nw", pady=2
+        )
+        self.voice_text = tk.Text(frame, width=30, height=5, wrap="word")
+        self.voice_text.grid(row=row, column=1, sticky="ew", pady=2)
+        row += 1
+
+        # Generate Examples button
+        self.gen_btn = ttk.Button(
+            frame,
+            text="Generate Examples",
+            command=self._generate_examples,
+        )
+        self.gen_btn.grid(row=row, column=1, sticky="e", pady=(0, 8))
+        row += 1
+
+        # Separator
+        ttk.Separator(frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=4
+        )
+        row += 1
+
+        # Save / Cancel
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=row, column=0, columnspan=2, sticky="e", pady=2)
+        ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(
+            side="left", padx=4
+        )
+        ttk.Button(btn_frame, text="Save", command=self._save).pack(side="left")
+
+        frame.columnconfigure(1, weight=1)
+
+    def _load_character(self, character_id):
+        char = get_character(self.conn, character_id)
+        if not char:
+            return
+        self.name_var.set(char["name"])
+        self.race_var.set(char["race"])
+        self.class_var.set(char["class"])
+        self._set_text(self.backstory_text, char["backstory"])
+        self._set_text(self.notes_text, char["notes"])
+        self._set_text(self.voice_text, char["voice_examples"])
+
+    def _set_text(self, widget, value):
+        widget.delete("1.0", "end")
+        if value:
+            widget.insert("1.0", value)
+
+    def _get_text(self, widget):
+        return widget.get("1.0", "end-1c").strip()
+
+    def _get_character_data(self):
+        return {
+            "name": self.name_var.get().strip(),
+            "race": self.race_var.get().strip(),
+            "class": self.class_var.get().strip(),
+            "backstory": self._get_text(self.backstory_text),
+            "notes": self._get_text(self.notes_text),
+            "voice_examples": self._get_text(self.voice_text),
+        }
+
+    def _save(self):
+        data = self._get_character_data()
+        if not data["name"] or not data["race"] or not data["class"]:
+            messagebox.showwarning(
+                "Missing Fields", "Name, Race, and Class are required."
+            )
+            return
+
+        if self.character_id:
+            update_character(self.conn, self.character_id, **data)
+            data["id"] = self.character_id
+        else:
+            data["id"] = add_character(
+                self.conn,
+                data["name"],
+                data["race"],
+                data["class"],
+                data["backstory"],
+                data["notes"],
+                data["voice_examples"],
+            )
+        self.result = data
+        self.destroy()
+
+    def _generate_examples(self):
+        data = self._get_character_data()
+        if not data["name"] or not data["race"] or not data["class"]:
+            messagebox.showwarning(
+                "Missing Fields",
+                "Fill in Name, Race, and Class before generating examples.",
+            )
+            return
+
+        self.gen_btn.config(text="Generating...", state="disabled")
+
+        def run():
+            result = generate_voice_examples(data)
+            self.after(0, lambda: self._on_examples_generated(result))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_examples_generated(self, text):
+        self.gen_btn.config(text="Generate Examples", state="normal")
+        self._set_text(self.voice_text, text)
