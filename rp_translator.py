@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+import sys
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
@@ -71,9 +72,16 @@ def _migrate_voice_examples(conn):
     conn.commit()
 
 
+def _app_dir():
+    """Writable directory for data files. Exe dir when frozen, script dir otherwise."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def _db_path():
-    """Path to characters.db in the same directory as this script."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "characters.db")
+    """Path to characters.db alongside the app."""
+    return os.path.join(_app_dir(), "characters.db")
 
 
 def add_character(conn, name, race, class_, backstory, notes):
@@ -194,7 +202,7 @@ def clear_voice_examples(conn, character_id):
 # ── Settings ──────────────────────────────────────────────────────────────────
 
 def _settings_path():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+    return os.path.join(_app_dir(), "settings.json")
 
 
 DEFAULT_SETTINGS = {
@@ -975,12 +983,17 @@ class MainWindow(tk.Tk):
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
 def main():
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "characters.db")
-    conn = sqlite3.connect(db_path)
-    init_db(conn)
-    app = MainWindow(conn)
-    app.mainloop()
-    conn.close()
+    try:
+        conn = sqlite3.connect(_db_path())
+        init_db(conn)
+        app = MainWindow(conn)
+        app.mainloop()
+        conn.close()
+    except Exception as e:
+        # When frozen with --windowed, stderr is invisible — show a dialog instead.
+        import tkinter.messagebox
+        tkinter.messagebox.showerror("RP Translator Error", str(e))
+        raise
 
 
 if __name__ == "__main__":
