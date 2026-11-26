@@ -183,6 +183,23 @@ def test_build_system_prompt_special_chars():
     assert "hi -> greetings" in prompt
 
 
+# ── API Key Check ─────────────────────────────────────────────────────────────
+
+def test_check_api_key_missing(monkeypatch):
+    from rp_translator import check_api_key
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    result = check_api_key()
+    assert result is not None
+    assert "OPENROUTER_API_KEY" in result
+
+
+def test_check_api_key_present(monkeypatch):
+    from rp_translator import check_api_key
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-key")
+    result = check_api_key()
+    assert result is None
+
+
 def test_call_llm_missing_key(monkeypatch):
     from rp_translator import call_llm
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)

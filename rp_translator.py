@@ -230,6 +230,22 @@ def save_settings(settings):
         json.dump(settings, f, indent=2)
 
 
+# ── API Key ───────────────────────────────────────────────────────────────────
+
+README_URL = "https://github.com/RGonzalezTech/rp_translator#api-key-setup"
+
+
+def check_api_key():
+    """Return an error message if OPENROUTER_API_KEY is not set, else None."""
+    if not os.environ.get("OPENROUTER_API_KEY", ""):
+        return (
+            "OPENROUTER_API_KEY environment variable is not set.\n\n"
+            "Set it to your OpenRouter API key, then restart the app.\n\n"
+            f"See instructions: {README_URL}"
+        )
+    return None
+
+
 # ── LLM Client ────────────────────────────────────────────────────────────────
 
 import requests
@@ -983,6 +999,13 @@ class MainWindow(tk.Tk):
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
 def main():
+    # Check API key before anything else — show a dialog if missing.
+    error = check_api_key()
+    if error:
+        import tkinter.messagebox
+        tkinter.messagebox.showwarning("RP Translator — API Key Missing", error)
+        return
+
     try:
         conn = sqlite3.connect(_db_path())
         init_db(conn)
