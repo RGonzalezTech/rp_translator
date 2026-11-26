@@ -366,6 +366,72 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+# ── Theme ─────────────────────────────────────────────────────────────────────
+
+# Fantasy palette — dark parchment and warm wood tones.
+PALETTE = {
+    "bg":       "#2b1e10",
+    "frame":    "#3d2916",
+    "text_fg":  "#e8d5a3",
+    "text_bg":  "#1a1208",
+    "accent":   "#c8a45c",
+    "btn":      "#4a3520",
+    "btn_hov":  "#6b4d2e",
+    "error":    "#ff6b6b",
+    "dim":      "#8a7550",
+}
+
+
+def apply_theme():
+    style = ttk.Style()
+    style.theme_use("clam")
+
+    # Global defaults
+    style.configure(".", background=PALETTE["bg"], foreground=PALETTE["text_fg"],
+                    fieldbackground=PALETTE["text_bg"], font=("Segoe UI", 10))
+
+    # Frames
+    style.configure("TFrame", background=PALETTE["bg"])
+    style.configure("TLabelframe", background=PALETTE["bg"],
+                    bordercolor=PALETTE["accent"], relief="groove")
+    style.configure("TLabelframe.Label", background=PALETTE["bg"],
+                    foreground=PALETTE["accent"], font=("Segoe UI", 10, "bold"))
+
+    # Labels
+    style.configure("TLabel", background=PALETTE["bg"], foreground=PALETTE["text_fg"])
+
+    # Buttons
+    style.configure("TButton", background=PALETTE["btn"],
+                    foreground=PALETTE["text_fg"], borderwidth=1,
+                    focusthickness=0, padding=(10, 4))
+    style.map("TButton",
+              background=[("active", PALETTE["btn_hov"]),
+                          ("disabled", PALETTE["frame"])],
+              foreground=[("disabled", PALETTE["dim"])])
+
+    # Entries / Combobox
+    style.configure("TEntry", fieldbackground=PALETTE["text_bg"],
+                    foreground=PALETTE["text_fg"], insertcolor=PALETTE["accent"])
+    style.configure("TCombobox", fieldbackground=PALETTE["text_bg"],
+                    foreground=PALETTE["text_fg"], arrowcolor=PALETTE["accent"])
+    style.map("TCombobox",
+              fieldbackground=[("readonly", PALETTE["text_bg"])],
+              foreground=[("readonly", PALETTE["text_fg"])])
+
+    # Separator
+    style.configure("TSeparator", background=PALETTE["accent"])
+
+
+def _style_text(widget):
+    """Apply fantasy colors to a tk.Text widget (not covered by ttk)."""
+    widget.configure(
+        bg=PALETTE["text_bg"], fg=PALETTE["text_fg"],
+        insertbackground=PALETTE["accent"],
+        selectbackground=PALETTE["accent"], selectforeground=PALETTE["text_bg"],
+        relief="solid", borderwidth=1,
+        font=("Segoe UI", 10),
+    )
+
 
 class CharacterDialog(tk.Toplevel):
     """Dialog for creating or editing a character."""
@@ -377,7 +443,8 @@ class CharacterDialog(tk.Toplevel):
         self.result = None  # set to character dict on save, None on cancel
 
         self.title("Edit Character" if character_id else "New Character")
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(400, 350)
         self.transient(parent)
         self.grab_set()
 
@@ -428,13 +495,17 @@ class CharacterDialog(tk.Toplevel):
             row=row, column=0, sticky="nw", pady=2
         )
         self.backstory_text = tk.Text(frame, width=30, height=3, wrap="word")
-        self.backstory_text.grid(row=row, column=1, sticky="ew", pady=2)
+        _style_text(self.backstory_text)
+        self.backstory_text.grid(row=row, column=1, sticky="nsew", pady=2)
+        frame.rowconfigure(row, weight=1)
         row += 1
 
         # Notes
         ttk.Label(frame, text="Notes:").grid(row=row, column=0, sticky="nw", pady=2)
         self.notes_text = tk.Text(frame, width=30, height=3, wrap="word")
-        self.notes_text.grid(row=row, column=1, sticky="ew", pady=2)
+        _style_text(self.notes_text)
+        self.notes_text.grid(row=row, column=1, sticky="nsew", pady=2)
+        frame.rowconfigure(row, weight=1)
         row += 1
 
         # Voice Examples — table header
@@ -636,6 +707,8 @@ class MainWindow(tk.Tk):
         self.selected_character_id = None
         self.settings = load_settings()
 
+        apply_theme()
+        self.configure(bg=PALETTE["bg"])
         self.title("RP Translator")
         self.geometry("480x420")
         self.minsize(400, 300)
@@ -789,9 +862,9 @@ class MainWindow(tk.Tk):
         if hasattr(self, "hotkey_status"):
             self.hotkey_status.config(text=text)
             if error:
-                self.hotkey_status.config(foreground="red")
+                self.hotkey_status.config(foreground=PALETTE["error"])
             else:
-                self.hotkey_status.config(foreground="gray")
+                self.hotkey_status.config(foreground=PALETTE["dim"])
 
     def _stop_hotkey_listener(self):
         if self._hotkey_listener:
@@ -824,7 +897,7 @@ class MainWindow(tk.Tk):
 
         # Placeholder shown when no characters
         self.no_chars_label = ttk.Label(
-            top, text="No characters — create one first", foreground="gray"
+            top, text="No characters — create one first", foreground=PALETTE["dim"]
         )
 
         # Middle panel — Input
@@ -832,6 +905,7 @@ class MainWindow(tk.Tk):
         mid.pack(fill="x", padx=8, pady=4)
 
         self.input_text = tk.Text(mid, height=3, wrap="word")
+        _style_text(self.input_text)
         self.input_text.pack(fill="x")
         # Update translate button state on input change
         self.input_text.bind("<KeyRelease>", lambda e: self._update_translate_state())
@@ -850,6 +924,7 @@ class MainWindow(tk.Tk):
         bot.pack(fill="both", expand=True, padx=8, pady=4)
 
         self.result_text = tk.Text(bot, height=3, wrap="word", state="disabled")
+        _style_text(self.result_text)
         self.result_text.pack(fill="both", expand=True)
 
         copy_row = ttk.Frame(bot)
@@ -862,7 +937,7 @@ class MainWindow(tk.Tk):
 
         # Status bar
         self.hotkey_status = ttk.Label(
-            self, text="Hotkey: starting...", foreground="gray"
+            self, text="Hotkey: starting...", foreground=PALETTE["dim"]
         )
         self.hotkey_status.pack(side="bottom", anchor="w", padx=8, pady=(2, 4))
 
@@ -974,7 +1049,7 @@ class MainWindow(tk.Tk):
            result.startswith("Translation timed") or result.startswith("Error"):
             self.result_text.insert("1.0", result)
             self.result_text.tag_add("error", "1.0", "end")
-            self.result_text.tag_config("error", foreground="red")
+            self.result_text.tag_config("error", foreground=PALETTE["error"])
         else:
             self.result_text.insert("1.0", result)
             self.result_text.tag_remove("error", "1.0", "end")
